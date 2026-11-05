@@ -113,11 +113,18 @@ class PacingTests(unittest.TestCase):
         old = duel.player_question
         self.assertFalse(duel.submit_answer(str(old.answer + 1)))
         self.assertIs(duel.player_question, old)
+        self.assertGreater(duel.retry_remaining, 3)
         for _ in range(10):
             duel.update(0.1)
         self.assertIs(duel.player_question, old)
+        self.assertIn("SPELL UNSTABLE", duel.player_feedback)
+        for _ in range(40):
+            if duel.player_waiting:
+                break
+            duel.update(0.1)
+        self.assertTrue(duel.player_waiting)
         self.assertIn(str(old.answer), duel.player_feedback)
-        for _ in range(14):
+        for _ in range(30):
             duel.update(0.1)
         self.assertIsNot(duel.player_question, old)
 

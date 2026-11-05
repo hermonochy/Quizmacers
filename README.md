@@ -1,3 +1,78 @@
+# Quizmancers v1.2 — A Kinder Way to Cast
+
+Quizmancers is a single-player Pygame revision battle game. Choose a course, exam board, subject and subtopic, answer questions, cast elemental spells, and work your way from Apprentice to Archmage.
+
+## What's new in v1.2?
+
+### Spell unstable! Try again!
+
+A **wrong submitted answer** now triggers a **single short correction window** rather than immediately losing the spell. You have 3.5 seconds in Standard pace, 4.5 in Relaxed, and 3 seconds in Competitive. Correcting the answer still fires a spell at **72% of its usual power** and ends your combo. Making a second incorrect submission, or letting the correction timer expire, ends the question as a miscast and shows the correct answer.
+
+A corrected answer is **still recorded as a mistake for adaptive revision**: you got a chance to save the spell, but the game knows this is something worth practising. This also avoids accidentally mastering questions just by guessing. There is only one correction per question.
+
+For **times tables**, type your answer and press **Enter** to submit. **Backspace** lets you fix a typo before submitting. For **multiple-choice**, pressing **1–4** or clicking a choice now *selects* it without submitting. Press **Enter** to confirm, or click the same selected answer a second time. You may change your selection before confirming.
+
+### Revision Pace
+
+The main menu now includes a **PACE** selector next to AI difficulty. Click it or press **P** on the menu.
+
+| Pace | Player question limit | AI solving speed | Ambient familiar attacks | Correction grace |
+| --- | --- | --- | --- | --- |
+| Relaxed | 150% of Standard | 45% longer to answer | Less frequent | 4.5 seconds |
+| Standard | Original limits | Standard speed | Standard frequency | 3.5 seconds |
+| Competitive | 85% of Standard | 13% faster | More frequent | 3 seconds |
+
+These pace multipliers also adjust total duel duration and how strongly response speed contributes to damage. **AI difficulty** (Apprentice / Duelist / Archmage) remains a separate setting. The game remembers your selected pace and AI difficulty in `settings.json` beside `main.py`.
+
+### Adventure mode foundation (not yet playable)
+
+New independent modules in `quizmancers/adventure/` define the first chapter of a future story:
+
+- **Starfall School of Wizardry:** Attend maths lessons on number sense, times tables, fractions and algebra.
+- **Magical companion:** Begin with Pip, a starling spirit. Ember and Moss are also defined as future companion choices; companions are narrative/cosmetic for now.
+- **Training duel:** Prove what you've learned against the academy's practice golem.
+- **Inciting incident:** When you finish the academy trial, the Astral Beacon shatters.
+- **Teleportation portals:** The school portal opens to Whisperwood. Further locations (Crystal Coast and Ember Peaks) open after their respective encounters.
+- **Exploration, quests and encounters:** Each location defines story text and encounters tied to an existing maths subject/subtopic, with boss flags for later chapters.
+- **Adventure-specific saving:** `AdventureStore` can save story progress in an independent `adventure.json` file beside `main.py`, without changing your wizard rank or question history.
+
+`AdventureWorld.make_duel(...)` already constructs a normal Quizmancers battle using a story lesson or enemy's subject. The adventure world is currently **a tested game-logic foundation**; exploration, a map interface, companion animations, classroom scenes and adventure menus will be added later. Only the existing duel mode is playable in v1.2.
+
+## Controls
+
+| Screen | Controls |
+| --- | --- |
+| Main menu | Up/Down: select course/board/subject/subtopic; Left/Right: change; Tab: AI difficulty; **P: Revision Pace**; Enter: start |
+| Battle | Q/W/E/R/T: fire, earth, water, air, spirit; digits: enter times-table answer or select choice; Enter: cast or confirm; Backspace: edit typed answer; Space: parry; H: guide |
+| Results | R or Enter: rematch; M: return to menu |
+
+You can also use the mouse for menu selectors and spells. For multiple-choice, select an answer with one click and cast with a second click on that answer, or by pressing Enter. The battle window can be resized.
+
+## Run the game
+
+Extract the ZIP, then from the folder containing `main.py` run:
+
+```bash
+pip install -r requirements.txt
+python main.py
+```
+
+## Updating from v1.1
+
+Extract the new ZIP into a fresh folder, then **copy your existing `progress.json` and `questions.db`** beside the new `main.py`. Keep backups of both files. Do not replace a newer `questions.db` with an older copy: it contains your adaptive revision records. Your saved rank and question history are retained. `settings.json` is new and created when you change the menu options.
+
+## Tests
+
+```bash
+python -m unittest discover -s tests -q
+```
+
+The automated tests check the new correction window, question history, pace multipliers, save files, adventure portals, story state, and existing battle mechanics. The real Pygame interface still needs a local graphical playtest; the development environment could not install Pygame.
+
+---
+
+## v1.1 technical documentation
+
 # Quizmancers v1.1 — Realistic question timings and more maths
 
 Quizmancers is a Python/Pygame revision duel. Choose **course → exam board → subject → subtopic** on the main menu, then answer questions to cast elemental spells. The wizard's rank and available spell tier remain permanent and are determined by victories and defeats. The duel remains paced so you get to watch your spell resolve before your next question. v1.1 adds individual solving-time estimates to the question database, and the AI now uses those estimates instead of a times-tables pace.

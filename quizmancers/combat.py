@@ -17,6 +17,7 @@ from .question_database import DatabaseBank, QuestionDatabase
 from .curriculum import StudySelection
 from .question_timing import ai_solve_delay, round_length_for, time_limit_for
 from .spells import COUNTERS, ELEMENT_ORDER, spell_for
+from .pace import pace_for
 from .fusions import FUSION_COOLDOWN, FUSION_ELEMENTS, FUSION_KINDS, FUSION_WINDOW, fusion_for, potential_fusions
 
 
@@ -160,7 +161,7 @@ class AIController:
 class Duel:
     def __init__(self, seed: int | None = None, difficulty: str = "Duelist", rank_index: int = 0,
                  topic: str = "Times Tables", database: QuestionDatabase | None = None,
-                 selection: StudySelection | None = None):
+                 selection: StudySelection | None = None, pace: str = "Standard"):
         self.rng = random.Random(seed)
         self.selection = selection
         self.topic = selection.title if selection is not None else topic
@@ -179,6 +180,7 @@ class Duel:
             database.initialise()
             self.bank = DatabaseBank(database, topic, self.rng, self.revision, selection=selection)
             self.ai_bank = DatabaseBank(database, topic, ai_rng, selection=selection)
+        self.pace = pace_for(pace)
         self.difficulty = difficulty if difficulty in ("Apprentice", "Duelist", "Archmage") else "Duelist"
         from .progression import tier_for_rank
         self.rank_index = max(0, min(8, rank_index))
@@ -188,11 +190,11 @@ class Duel:
         self.ai = Wizard("ai", AI_X, level=spell_tier, familiar_timer=5.7)
         self.player_question = self.bank.next_question()
         self.ai_question = self.ai_bank.next_question()
-        self.question_duration = time_limit_for(self.player_question)
+        self.question_duration = time_limit_for(self.player_question) * self.pace.deadline_scale
         self.ai_question_duration = max(time_limit_for(self.ai_question),
-                                        time_limit_for(self.player_question))
+                                        time_limit_for(self.player_question)) * self.pace.deadline_scale
         self.round_duration = (ROUND_SECONDS if self.is_times_tables else round_length_for(
-            [question.expected_seconds for question in self.bank.questions]))
+            [question.expected_seconds for question in self.bank.questions])) * self.pace.deadline_scale
         self.player_question_elapsed = 0.0
         self.ai_question_elapsed = 0.0
         self.ai_answer_at = self._ai_answer_delay()
@@ -207,15 +209,17 @@ class Duel:
         self.player_recovery = 0.0
         self.ai_recovery = 0.0
         self.player_feedback = ""
+        self.retry_remaining = 0.0
+        self.retry_used = False
         self.winner: str | None = None
         self.finished = False
 
     def _ai_answer_delay(self) -> float:
         if self.is_times_tables:
-            return self.ai_controller.next_answer_time(self.ai, self.player) * 1.22
+            return self.ai_controller.next_answer_time(self.ai, self.player) * 1.22 * self.pace.ai_delay_scale
         estimate = max(self.ai_question.expected_seconds, self.player_question.expected_seconds)
         return ai_solve_delay(estimate, self.difficulty, self.rank_index,
-                              self.rng, self.ai.level)
+                              self.rng, self.ai.level) * self.pace.ai_delay_scale
 
     @property
     def player_question_active(self) -> bool:
@@ -231,6 +235,8 @@ class Duel:
 
     @property
     def question_seconds_left(self) -> float:
+        if self.retry_remaining > 0:
+            return self.retry_remaining
         return max(0.0, self.question_duration - self.player_question_elapsed)
 
     @property
@@ -260,6 +266,21 @@ class Duel:
     def _opponent(self, side: str) -> Wizard:
         return self.ai if side == "player" else self.player
 
+    def _finalise_miscast(self, timed_out: bool = False) -> None:
+        if self.revision is not None:
+            self.revision.record(self.player_question, False, timed_out=timed_out)
+        expected = (self.player_question.options[self.player_question.correct_index]
+                    if self.player_question.options else str(self.player_question.answer))
+        self.player_feedback = f"Correct answer: {expected}"
+        self.player.combo = 0
+        self.player.recent_element = None
+        self.player.fusion_window = 0.0
+        self.retry_remaining = 0.0
+        self.player_waiting = True
+        self.player_recovery = 2.2
+        self._event("timeout" if timed_out else "answer_wrong", "player", self.player.x,
+                    259, "TIME UP!" if timed_out else "MISCAST!", 0)
+
     def submit_answer(self, answer: str) -> bool | None:
         if self.finished or self.player_waiting:
             return None
@@ -269,21 +290,28 @@ class Duel:
         if self.player_question.options and normalized not in ("1", "2", "3", "4"):
             return None
         correct = self.player_question.is_correct(normalized)
-        if self.revision is not None:
-            self.revision.record(self.player_question, correct)
         if correct:
+            if self.revision is not None:
+                self.revision.record(self.player_question, not self.retry_used)
             self.player_feedback = ""
-            self._answer_success("player", self.selected_element, self.player_question_elapsed)
-        else:
-            expected = (self.player_question.options[self.player_question.correct_index]
-                        if self.player_question.options else str(self.player_question.answer))
-            self.player_feedback = f"Correct answer: {expected}"
+            self._answer_success("player", self.selected_element, self.player_question_elapsed,
+                                 0.72 if self.retry_used else 1.0)
+            if self.retry_used:
+                self._event("answer_correct", "player", self.player.x, 283,
+                            "RECOVERED CAST!", 0, self.selected_element, self.player.level)
+            self.retry_remaining = 0.0
+            self.player_waiting = True
+            self.player_recovery = 0.9
+        elif not self.retry_used:
+            self.retry_used = True
+            self.retry_remaining = self.pace.retry_seconds
             self.player.combo = 0
             self.player.recent_element = None
             self.player.fusion_window = 0.0
-            self._event("answer_wrong", "player", self.player.x, 259, "MISCAST!", 0)
-        self.player_waiting = True
-        self.player_recovery = 0.9 if correct else 2.2
+            self.player_feedback = "SPELL UNSTABLE! TRY AGAIN!"
+            self._event("retry", "player", self.player.x, 260, "SPELL UNSTABLE!", 0)
+        else:
+            self._finalise_miscast()
         return correct
 
     def activate_pulse(self, side: str = "player") -> bool:
@@ -299,14 +327,16 @@ class Duel:
 
     def _next_player_question(self) -> None:
         self.player_question = self.bank.next_question()
-        self.question_duration = time_limit_for(self.player_question)
+        self.question_duration = time_limit_for(self.player_question) * self.pace.deadline_scale
         self.ai_question_duration = max(self.ai_question_duration, self.question_duration)
         self.player_question_elapsed = 0.0
+        self.retry_remaining = 0.0
+        self.retry_used = False
 
     def _next_ai_question(self) -> None:
         self.ai_question = self.ai_bank.next_question()
         self.ai_question_duration = max(time_limit_for(self.ai_question),
-                                        time_limit_for(self.player_question))
+                                        time_limit_for(self.player_question)) * self.pace.deadline_scale
         self.ai_question_elapsed = 0.0
         self.ai_answer_at = max(0.85, self._ai_answer_delay())
 
@@ -319,10 +349,10 @@ class Duel:
         self.events = []
         return events
 
-    def _answer_success(self, side: str, element: Element, answer_time: float) -> None:
+    def _answer_success(self, side: str, element: Element, answer_time: float, power_scale: float = 1.0) -> None:
         wizard = self._wizard(side)
         wizard.combo = min(6, wizard.combo + 1)
-        power = self._cast(side, element, answer_time)
+        power = self._cast(side, element, answer_time, power_scale)
         self._try_fusion(side, element, power)
         if side == "player":
             message = f"{spell_for(element, wizard.level).name.upper()}!  "
@@ -363,14 +393,15 @@ class Duel:
             wizard.recent_element = element if element != Element.SPIRIT else None
             wizard.fusion_window = FUSION_WINDOW if wizard.recent_element is not None else 0.0
 
-    def _cast(self, side: str, element: Element, answer_time: float) -> int:
+    def _cast(self, side: str, element: Element, answer_time: float, power_scale: float = 1.0) -> int:
         wizard = self._wizard(side)
         spec = spell_for(element, wizard.level)
         expected = max(5.0, (self.player_question.expected_seconds if side == 'player'
                     else self.ai_question.expected_seconds))
         speed_factor = max(0.0, 1.0 - min(answer_time, expected * 1.5) / (expected * 1.5))
         combo_bonus = 1.0 + min(0.2, (wizard.combo - 1) * 0.04)
-        power = round((spec.power + spec.speed_bonus * speed_factor) * combo_bonus)
+        power = max(1, round((spec.power + spec.speed_bonus * speed_factor * self.pace.speed_bonus_scale)
+                             * combo_bonus * power_scale))
         if side == "ai":
             power = max(1, round(power * {"Apprentice": 0.62, "Duelist": 0.77,
                                            "Archmage": 1.0}[self.difficulty]))
@@ -628,7 +659,7 @@ class Duel:
             wizard.burn_accumulator = 0.0
         wizard.familiar_timer -= dt
         if wizard.familiar_timer <= 0:
-            wizard.familiar_timer += 6.6
+            wizard.familiar_timer += 6.6 * self.pace.familiar_interval_scale
             element = wizard.casting_element if wizard.casting_element != Element.SPIRIT else Element.AIR
             self._launch(wizard.side, element, wizard.level, 3 + wizard.level, familiar=True)
 
@@ -701,7 +732,12 @@ class Duel:
         dt = max(0.0, min(0.1, dt))
         self.elapsed += dt
         if not self.player_waiting:
-            self.player_question_elapsed += dt
+            if self.retry_remaining > 0:
+                self.retry_remaining = max(0.0, self.retry_remaining - dt)
+                if self.retry_remaining == 0.0:
+                    self._finalise_miscast()
+            else:
+                self.player_question_elapsed += dt
         if not self.ai_waiting:
             self.ai_question_elapsed += dt
         for wizard in (self.player, self.ai):
@@ -713,18 +749,8 @@ class Duel:
         self._finish_if_needed()
         if self.finished:
             return
-        if not self.player_waiting and self.player_question_elapsed >= self.question_duration:
-            if self.revision is not None:
-                self.revision.record(self.player_question, False, timed_out=True)
-            self.player.combo = 0
-            self.player.recent_element = None
-            self.player.fusion_window = 0.0
-            expected = (self.player_question.options[self.player_question.correct_index]
-                        if self.player_question.options else str(self.player_question.answer))
-            self.player_feedback = f"Correct answer: {expected}"
-            self._event("timeout", "player", self.player.x, 259, "TIME UP!")
-            self.player_waiting = True
-            self.player_recovery = 2.2
+        if not self.player_waiting and self.retry_remaining <= 0 and self.player_question_elapsed >= self.question_duration:
+            self._finalise_miscast(timed_out=True)
         if not self.ai_waiting and self.ai_question_elapsed >= min(self.ai_answer_at, self.ai_question_duration):
             if self.ai_answer_at <= self.ai_question_duration and self.ai_controller.correct(self.ai, self.player):
                 element = self.ai_controller.choose_element(self.ai, self.player)

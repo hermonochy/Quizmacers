@@ -57,7 +57,8 @@ class Renderer:
         }
         self.menu_topic_prev_rect, self.menu_topic_rect, self.menu_topic_next_rect = self.menu_selector_rects["subtopic"]
         self.menu_play_rect = pygame.Rect(400, 551, 380, 48)
-        self.menu_difficulty_rect = pygame.Rect(400, 611, 380, 40)
+        self.menu_difficulty_rect = pygame.Rect(400, 611, 181, 40)
+        self.menu_pace_rect = pygame.Rect(599, 611, 181, 40)
         self.rematch_rect = pygame.Rect(392, 458, 190, 43)
         self.back_menu_rect = pygame.Rect(604, 458, 190, 43)
 
@@ -458,7 +459,7 @@ class Renderer:
             result.append(current)
         return result[:lines]
 
-    def _question_ui(self, surface: pygame.Surface, duel: Duel, answer: str, effects: Effects, mouse_pos):
+    def _question_ui(self, surface: pygame.Surface, duel: Duel, answer: str, effects: Effects, mouse_pos, choice_selected=None):
         pygame.draw.rect(surface, (16, 12, 32), (17, 524, 1146, 184), border_radius=21)
         pygame.draw.rect(surface, PANEL, (22, 525, 1136, 177), border_radius=20)
         pygame.draw.rect(surface, (197, 146, 113), (22, 525, 1136, 177), 2, border_radius=20)
@@ -467,13 +468,16 @@ class Renderer:
         if self.fonts[heading_font].size(heading)[0] > 275:
             heading = heading[:35] + "..."
         self._text(surface, heading, 48, 539, heading_font, (255, 220, 141))
-        if duel.player_question_active and duel.player_question_is_review:
+        if duel.retry_remaining > 0:
+            self._text(surface, "SPELL UNSTABLE!", 312, 540, "tiny", (255, 153, 118))
+        elif duel.player_question_active and duel.player_question_is_review:
             self._text(surface, "REVIEW FOCUS", 313, 540, "tiny", (152, 236, 204))
         remaining = duel.question_seconds_left
-        timer_color = (255, 139, 143) if remaining < 4 else (205, 193, 227)
+        timer_color = (255, 139, 143) if remaining < 4 or duel.retry_remaining > 0 else (205, 193, 227)
         self._text(surface, "--" if duel.player_waiting else f"{remaining:04.1f}s", 423, 539, "small", timer_color)
         pygame.draw.rect(surface, (83, 61, 99), (48, 566, 429, 5), border_radius=2)
-        ratio = remaining / duel.question_duration if duel.player_question_active else 0.0
+        ratio = (remaining / max(0.1, duel.pace.retry_seconds) if duel.retry_remaining > 0
+                 else remaining / duel.question_duration if duel.player_question_active else 0.0)
         pygame.draw.rect(surface, (252, 193, 95), (48, 566, round(429 * ratio), 5), border_radius=2)
         if duel.player_waiting:
             if duel.player_feedback:
@@ -494,8 +498,9 @@ class Renderer:
             for index, option in enumerate(duel.player_question.options):
                 rect = self.choice_rects[index]
                 hover = rect.collidepoint(mouse_pos)
-                pygame.draw.rect(surface, (100, 76, 129) if hover else (64, 47, 91), rect, border_radius=7)
-                pygame.draw.rect(surface, (226, 190, 135) if hover else (129, 105, 151), rect, 2, border_radius=7)
+                selected = choice_selected == index + 1
+                pygame.draw.rect(surface, (137, 98, 106) if selected else (100, 76, 129) if hover else (64, 47, 91), rect, border_radius=7)
+                pygame.draw.rect(surface, (255, 221, 135) if selected else (226, 190, 135) if hover else (129, 105, 151), rect, 3 if selected else 2, border_radius=7)
                 font = "card" if self.fonts["card"].size(option)[0] <= 165 else "card_small"
                 self._text(surface, str(index + 1), rect.x + 8, rect.y + 8, "card", (255, 221, 145))
                 self._text(surface, option, rect.x + 28, rect.y + (8 if font == "card" else 9),
@@ -514,9 +519,11 @@ class Renderer:
         if effects.feedback_lifetime > 0:
             text, color = effects.feedback, effects.feedback_color
         elif duel.player_question.options:
-            text, color = "PRESS 1-4 OR CLICK AN ANSWER  ·  NO ENTER NEEDED", MUTED_TEXT
+            text, color = ("SPELL UNSTABLE! CORRECT IT, THEN ENTER" if duel.retry_remaining > 0
+                           else "SELECT 1-4  ·  ENTER OR CLICK AGAIN TO CAST"), MUTED_TEXT
         else:
-            text, color = "Q W E R T: SPELLS   ·   ENTER: CAST", MUTED_TEXT
+            text, color = ("SPELL UNSTABLE! CORRECT IT, THEN ENTER" if duel.retry_remaining > 0
+                           else "Q W E R T: SPELLS   ·   ENTER: CAST"), MUTED_TEXT
         self._text(surface, text, 49, 685, "small", color)
         if duel.player.combo >= 2:
             self._text(surface, f"{duel.player.combo}x STREAK", 354, 685, "small", (163, 255, 211))
@@ -638,7 +645,7 @@ class Renderer:
 
     def draw(self, surface: pygame.Surface, duel: Duel, answer: str, effects: Effects, time: float,
              mouse_pos, show_guide: bool = False, progress: Progress | None = None,
-             change: RankChange | None = None, save_error: bool = False):
+             change: RankChange | None = None, save_error: bool = False, choice_selected=None):
         surface.blit(self.background, (0, 0))
         ambient(surface, time)
         ultimate_atmosphere(surface, duel, time)
@@ -675,7 +682,7 @@ class Renderer:
         effects.draw(surface, self.fonts["popup"])
         self._hud(surface, duel, progress)
         self._fusion_hint(surface, duel)
-        self._question_ui(surface, duel, answer, effects, mouse_pos)
+        self._question_ui(surface, duel, answer, effects, mouse_pos, choice_selected)
         self._level_banner(surface, effects)
         self._fusion_banner(surface, effects)
         if show_guide and not duel.finished:
@@ -686,7 +693,8 @@ class Renderer:
     def draw_menu(self, surface: pygame.Surface, progress: Progress, difficulty: str, topic: str, time: float,
                   mouse_pos: tuple[int, int], save_error: bool = False,
                   revision_summary: RevisionSummary | None = None,
-                  selection: StudySelection | None = None, active_field: str = "subtopic") -> None:
+                  selection: StudySelection | None = None, active_field: str = "subtopic",
+                  pace: str = "Standard") -> None:
         surface.blit(self.background, (0, 0))
         ambient(surface, time)
         rank = progress.rank_index
@@ -752,12 +760,13 @@ class Renderer:
                          else (238, 181, 106), self.menu_play_rect, border_radius=12)
         self._text(surface, "START DUEL", WIDTH // 2, 559, "popup", (51, 33, 65), center=True)
         self._text(surface, "ENTER", WIDTH // 2, 584, "tiny", (73, 46, 68), center=True)
-        pygame.draw.rect(surface, (99, 74, 124) if self.menu_difficulty_rect.collidepoint(mouse_pos)
-                         else (76, 57, 102), self.menu_difficulty_rect, border_radius=9)
-        pygame.draw.rect(surface, (150, 123, 180), self.menu_difficulty_rect, 2, border_radius=9)
-        self._text(surface, f"AI DIFFICULTY: {difficulty.upper()}", WIDTH // 2, 620,
-                   "body", LIGHT_TEXT, center=True)
-        self._text(surface, "UP/DOWN: SELECT FIELD   ·   LEFT/RIGHT: CHANGE   ·   TAB: AI",
+        for rect, label in ((self.menu_difficulty_rect, f"AI: {difficulty.upper()}"),
+                            (self.menu_pace_rect, f"PACE: {pace.upper()}")):
+            pygame.draw.rect(surface, (99, 74, 124) if rect.collidepoint(mouse_pos)
+                             else (76, 57, 102), rect, border_radius=9)
+            pygame.draw.rect(surface, (150, 123, 180), rect, 2, border_radius=9)
+            self._text(surface, label, rect.centerx, 622, "small", LIGHT_TEXT, center=True)
+        self._text(surface, "UP/DOWN: FIELD  ·  LEFT/RIGHT: CHANGE  ·  TAB: AI  ·  P: PACE",
                    WIDTH // 2, 659, "tiny", (221, 200, 228), center=True)
         self._text(surface, "EXAM-BOARD QUESTIONS ARE SHARED PRACTICE, NOT OFFICIAL PAPERS",
                    WIDTH // 2, 677, "tiny", (221, 200, 228), center=True)

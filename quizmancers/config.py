@@ -4,7 +4,7 @@ from enum import Enum
 WIDTH = 1180
 HEIGHT = 720
 FPS = 60
-TITLE = "Quizmancers — Knowledge Arena v1.1"
+TITLE = "Quizmancers — Knowledge Arena v1.2"
 MAX_HEALTH = 340
 MAX_SHIELD = 72
 QUESTION_SECONDS = 16.0

@@ -174,6 +174,12 @@ class Effects:
                 else:
                     self.labels.append(FloatingLabel(f"RIVAL LEVEL {event.tier}!", event.x, event.y - 89, 1.6, 1.6, (255, 227, 172)))
                 self.audio.play("level_up")
+            elif event.kind == "retry":
+                self.feedback = "SPELL UNSTABLE! TRY AGAIN!"
+                self.feedback_color = (255, 207, 138)
+                self.feedback_lifetime = 1.7
+                self.emit(event.x, event.y, Element.SPIRIT, 12, 1)
+                self.audio.play("wrong")
             elif event.kind in ("answer_correct", "answer_wrong", "timeout"):
                 self.feedback = event.message
                 self.feedback_color = (160, 255, 195) if event.kind == "answer_correct" else (255, 153, 163)

@@ -9,6 +9,8 @@ from .progression import ProgressStore
 from .question_database import QuestionDatabase
 from .curriculum import StudySelection
 from .viewport import Viewport
+from .pace import PACE_NAMES
+from .settings import SettingsStore
 
 
 class Game:
@@ -25,7 +27,10 @@ class Game:
         self.running = True
         self.elapsed = 0.0
         self.show_guide = False
-        self.difficulty = "Duelist"
+        self.settings_store = SettingsStore()
+        self.settings = self.settings_store.load()
+        self.difficulty = self.settings.difficulty
+        self.pace = self.settings.pace
         self.database = QuestionDatabase()
         self.database.initialise()
         self.selection = StudySelection()
@@ -40,9 +45,10 @@ class Game:
 
     def _new_match(self):
         self.duel = Duel(difficulty=self.difficulty, rank_index=self.progress.rank_index,
-                         database=self.database, selection=self.selection)
+                         database=self.database, selection=self.selection, pace=self.pace)
         self.effects = Effects(self.audio)
         self.answer = ""
+        self.choice_selected = None
         self.match_recorded = False
         self.last_rank_change = None
         self.show_guide = False
@@ -52,9 +58,22 @@ class Game:
         self.countdown = 3.75
         self.phase = "countdown"
 
+    def _save_settings(self):
+        self.settings.difficulty = self.difficulty
+        self.settings.pace = self.pace
+        try:
+            self.settings_store.save(self.settings)
+        except OSError:
+            self.save_error = True
+
     def _cycle_difficulty(self):
         order = ("Apprentice", "Duelist", "Archmage")
         self.difficulty = order[(order.index(self.difficulty) + 1) % len(order)]
+        self._save_settings()
+
+    def _cycle_pace(self):
+        self.pace = PACE_NAMES[(PACE_NAMES.index(self.pace) + 1) % len(PACE_NAMES)]
+        self._save_settings()
 
     def _cycle_field(self, field: str, offset: int):
         selection = self.selection
@@ -91,7 +110,10 @@ class Game:
     def _submit_choice(self, choice: int):
         if self.phase != "playing" or self.show_guide or not self.duel.player_question.options:
             return
-        self.duel.submit_answer(str(choice))
+        if self.choice_selected == choice:
+            self._submit()
+        else:
+            self.choice_selected = choice
 
     def _record_match(self):
         if not self.duel.finished or self.match_recorded:
@@ -107,13 +129,18 @@ class Game:
         self.phase = "results"
 
     def _submit(self):
-        if self.phase != "playing":
+        if self.phase != "playing" or self.duel.player_waiting or self.show_guide:
             return
         if self.duel.player_question.options:
-            return
-        result = self.duel.submit_answer(self.answer)
-        if result is not None:
-            self.answer = ""
+            if self.choice_selected is None:
+                return
+            result = self.duel.submit_answer(str(self.choice_selected))
+            if result is not None:
+                self.choice_selected = None
+        else:
+            result = self.duel.submit_answer(self.answer)
+            if result is not None:
+                self.answer = ""
 
     def _key_down(self, event):
         if event.key == pygame.K_ESCAPE:
@@ -129,6 +156,8 @@ class Game:
                 self._start_match()
             elif event.key == pygame.K_TAB:
                 self._cycle_difficulty()
+            elif event.key == pygame.K_p:
+                self._cycle_pace()
             elif event.key == pygame.K_UP:
                 self._cycle_menu_row(-1)
             elif event.key == pygame.K_DOWN:
@@ -185,6 +214,8 @@ class Game:
                 self._start_match()
             elif self.renderer.menu_difficulty_rect.collidepoint(point):
                 self._cycle_difficulty()
+            elif self.renderer.menu_pace_rect.collidepoint(point):
+                self._cycle_pace()
             else:
                 for field, (previous, value, following) in self.renderer.menu_selector_rects.items():
                     if previous.collidepoint(point):
@@ -267,6 +298,7 @@ class Game:
                     self.duel.update(dt)
                     if self.duel.player_question is not previous_question:
                         self.answer = ""
+                        self.choice_selected = None
                     self._record_match()
                     self.effects.on_events(self.duel.pop_events())
                     self.effects.trail(self.duel.projectiles, dt)
@@ -275,11 +307,12 @@ class Game:
                 if self.phase == "menu":
                     self.renderer.draw_menu(self.canvas, self.progress, self.difficulty,
                                             self.selection.subtopic, self.elapsed, mouse_pos, self.save_error,
-                                            self.revision_summary, self.selection, self.menu_field)
+                                            self.revision_summary, self.selection, self.menu_field, self.pace)
                 else:
                     self.renderer.draw(self.canvas, self.duel, self.answer, self.effects,
                                        self.elapsed, mouse_pos, self.show_guide,
-                                       self.progress, self.last_rank_change, self.save_error)
+                                       self.progress, self.last_rank_change, self.save_error,
+                                       self.choice_selected)
                     if self.phase == "countdown":
                         self.renderer.draw_countdown(self.canvas, self.countdown)
                 self._display()
