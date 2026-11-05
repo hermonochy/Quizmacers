@@ -1,5 +1,6 @@
 __pycache__/*
 quizmancers/__pycache__/*
+tests/*
 venv/*
-progress.json
-settings.json
+./progress.json
+./settings.json
